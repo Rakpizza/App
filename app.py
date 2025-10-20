@@ -3,115 +3,127 @@ from PIL import Image
 import easyocr
 import re
 import pandas as pd
+import numpy as np
+import io
+import time
 
-# -----------------------------
+# ----------------------------------------
 # ⚙️ הגדרות כלליות
-# -----------------------------
+# ----------------------------------------
 st.set_page_config(page_title="DualAsset Analyzer Pro", layout="centered")
 
 st.title("📊 DualAsset Analyzer Pro")
-st.write("העלה צילום מסך מ־Bybit (Buy Low / Sell High) — המערכת תנתח אוטומטית את ההצעות ותציג את ההמלצות הטובות ביותר.")
+st.write("העלה צילום מסך מ־Bybit (Buy Low / Sell High) — המערכת תזהה אוטומטית את הנתונים ותציג את ההמלצה הטובה ביותר.")
 st.divider()
 
-# -----------------------------
+# ----------------------------------------
 # 📸 העלאת תמונה
-# -----------------------------
+# ----------------------------------------
 uploaded_files = st.file_uploader("בחר תמונה או כמה תמונות לניתוח", accept_multiple_files=True, type=["png", "jpg", "jpeg"])
 
 if not uploaded_files:
     st.info("📷 העלה צילום מסך אחד לפחות כדי להתחיל.")
     st.stop()
 
-# -----------------------------
-# 🧠 קריאת טקסט מהתמונה (EasyOCR)
-# -----------------------------
-reader = easyocr.Reader(['en'])
-data_rows = []
+# ----------------------------------------
+# ⏳ טוען...
+# ----------------------------------------
+with st.spinner("🔍 קורא ומנתח את הנתונים מהתמונות... אנא המתן מספר שניות"):
+    reader = easyocr.Reader(['en'])
+    time.sleep(1)
 
-for file in uploaded_files:
-    img = Image.open(file)
-    result = reader.readtext(img)
-    text = " ".join([res[1] for res in result])
+    data_rows = []
 
-    # זיהוי המטבע
-    coin_match = re.search(r"(BTC|ETH|BNB|ARB|SOL|ADA|DOGE|MNT|USDT)", text)
-    coin = coin_match.group(1) if coin_match else "לא זוהה"
+    for file in uploaded_files:
+        img = Image.open(file)
+        result = reader.readtext(np.array(img))
+        text = " ".join([r[1] for r in result])
 
-    # חיפוש Target ו־APR
-    lines = text.split()
-    for i, word in enumerate(lines):
-        if re.match(r"^\d{3,5}\.\d+$", word):
-            if i + 1 < len(lines) and re.match(r"^\d{2,4}\.?\d*%$", lines[i + 1]):
-                target_val = float(word)
-                apr = float(lines[i + 1].replace("%", ""))
-                data_rows.append({"מטבע": coin, "Target": target_val, "APR": apr})
+        # איתור Index Price
+        index_match = re.search(r"Index Price.?([0-9]+\.[0-9]+)", text)
+        index_price = float(index_match.group(1)) if index_match else None
 
-# -----------------------------
-# בדיקה אם נמצאו נתונים
-# -----------------------------
+        # איתור ערכים של Target Price ו־APR
+        lines = text.split()
+        for i in range(len(lines) - 2):
+            if re.match(r"^[0-9]+\.[0-9]+$", lines[i]) and "%" in lines[i+2]:
+                try:
+                    target = float(lines[i])
+                    apr = float(lines[i+2].replace("%", ""))
+                    data_rows.append({
+                        "תמונה": file.name,
+                        "Index Price": index_price,
+                        "Target": target,
+                        "APR": apr
+                    })
+                except:
+                    continue
+
+# ----------------------------------------
+# 🧾 בדיקה אם נמצאו נתונים
+# ----------------------------------------
 if not data_rows:
-    st.warning("❌ לא נמצאו נתונים בתמונה. נסה צילום ממוקד של טבלת Bybit בלבד.")
+    st.error("❌ לא זוהו נתונים. ודא שהתמונה מכילה טבלת Bybit עם Index / Target / APR.")
     st.stop()
 
 df = pd.DataFrame(data_rows)
 
-# -----------------------------
-# 💰 הזנת מחיר נוכחי וסכום השקעה
-# -----------------------------
-st.divider()
-current_price = st.number_input("💲 מחיר נוכחי של המטבע", min_value=0.0, value=float(df['Target'].mean()), step=0.0001)
-investment = st.number_input("💵 סכום השקעה (USDT)", min_value=1.0, value=50.0, step=1.0)
+# אם לא זוהה מחיר אינדקס – נחשב ממוצע
+if df["Index Price"].isna().any():
+    df["Index Price"].fillna(df["Target"].mean(), inplace=True)
 
-# -----------------------------
-# 📊 חישוב דלתא והמלצות
-# -----------------------------
-def analyze_row(row):
-    delta = ((row['Target'] - current_price) / current_price) * 100
-    apr = row['APR']
-    daily_yield = investment * (apr / 100 / 365)
-
-    if abs(delta) < 1:
-        decision = "Hold / Split"
-        color = "🟨"
-    elif delta <= -1 and apr > 150:
-        decision = "Buy Low"
-        color = "🟩"
-    elif delta >= 1 and apr > 150:
-        decision = "Sell High"
-        color = "🟩"
-    elif abs(delta) > 5:
-        decision = "Skip (Too far)"
-        color = "🟥"
+# ----------------------------------------
+# 📊 חישוב סטיות והמלצות
+# ----------------------------------------
+def analyze(row):
+    diff = ((row["Target"] - row["Index Price"]) / row["Index Price"]) * 100
+    daily_yield = row["APR"] / 365
+    if abs(diff) < 0.3:
+        decision = "⚖️ פצל (Too close)"
+    elif diff > 0.3 and row["APR"] > 150:
+        decision = "📈 Sell High"
+    elif diff < -0.3 and row["APR"] > 150:
+        decision = "📉 Buy Low"
     else:
-        decision = "Hold"
-        color = "🟨"
+        decision = "🚫 לא משתלם"
+    return pd.Series({"Δ %": round(diff, 3), "החלטה": decision})
 
-    return pd.Series({
-        "Δ %": round(delta, 2),
-        "APR %": apr,
-        "רווח יומי (USDT)": round(daily_yield, 3),
-        "המלצה": f"{color} {decision}"
-    })
+analyzed = df.apply(analyze, axis=1)
+final = pd.concat([df, analyzed], axis=1)
 
-result = df.apply(analyze_row, axis=1)
-final_df = pd.concat([df, result], axis=1)
+# ----------------------------------------
+# 🧠 מציאת ההצעה הטובה ביותר
+# ----------------------------------------
+buy_best = final[final["החלטה"].str.contains("Buy Low", na=False)].sort_values("APR", ascending=False).head(1)
+sell_best = final[final["החלטה"].str.contains("Sell High", na=False)].sort_values("APR", ascending=False).head(1)
 
-# -----------------------------
-# 🧾 תוצאות
-# -----------------------------
+# ----------------------------------------
+# 📊 הצגת טבלה
+# ----------------------------------------
+st.success("✅ הניתוח הושלם!")
+st.dataframe(final, use_container_width=True)
+
+# ----------------------------------------
+# 🏆 המלצה סופית
+# ----------------------------------------
 st.divider()
-st.subheader("🔍 תוצאות הניתוח:")
-st.dataframe(final_df, use_container_width=True)
-
-best = final_df[final_df["המלצה"].str.contains("Buy Low|Sell High")]
-if not best.empty:
-    st.success("✅ הצעות מומלצות:\n" + "\n".join(
-        f"{row['מטבע']} @ {row['Target']} → {row['המלצה']} (APR {row['APR %']}%)"
-        for _, row in best.iterrows()
-    ))
+if not buy_best.empty or not sell_best.empty:
+    st.subheader("💡 ההצעות החזקות ביותר:")
+    if not buy_best.empty:
+        st.write(f"**קנייה (Buy Low):** Target {buy_best.iloc[0]['Target']} | APR {buy_best.iloc[0]['APR']}% | Δ {buy_best.iloc[0]['Δ %']}%")
+    if not sell_best.empty:
+        st.write(f"**מכירה (Sell High):** Target {sell_best.iloc[0]['Target']} | APR {sell_best.iloc[0]['APR']}% | Δ {sell_best.iloc[0]['Δ %']}%")
 else:
-    st.info("אין כרגע הצעות חזקות מספיק — רוב ההצעות קרובות מדי או רחוקות מדי.")
+    st.info("לא נמצאה הזדמנות יוצאת דופן כרגע. ייתכן שהשוק יציב מדי.")
 
-st.download_button("⬇️ הורד טבלה (CSV)", data=final_df.to_csv(index=False).encode('utf-8'), file_name="dualasset_results.csv", mime="text/csv")
-st.divider()
-st.caption("נבנה על ידי ChatGPT & Itamar 🔹 גרסה 1.1 עם EasyOCR")
+# ----------------------------------------
+# 📥 הורדת תוצאות
+# ----------------------------------------
+st.download_button(
+    "⬇️ הורד תוצאות כ־CSV",
+    data=final.to_csv(index=False).encode('utf-8'),
+    file_name="dualasset_analysis.csv",
+    mime="text/csv"
+)
+
+st.caption("נבנה על ידי Itamar & ChatGPT — גרסה 2.0 (Auto Detection + EasyOCR)")
