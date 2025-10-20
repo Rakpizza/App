@@ -1,6 +1,6 @@
 import streamlit as st
 from PIL import Image
-import pytesseract
+import easyocr
 import re
 import pandas as pd
 
@@ -10,7 +10,7 @@ import pandas as pd
 st.set_page_config(page_title="DualAsset Analyzer Pro", layout="centered")
 
 st.title("📊 DualAsset Analyzer Pro")
-st.write("העלה צילום מסך מ־Bybit (Buy Low / Sell High), והמערכת תנתח אוטומטית את ההצעות ותציג את ההמלצות הטובות ביותר.")
+st.write("העלה צילום מסך מ־Bybit (Buy Low / Sell High) — המערכת תנתח אוטומטית את ההצעות ותציג את ההמלצות הטובות ביותר.")
 st.divider()
 
 # -----------------------------
@@ -23,32 +23,34 @@ if not uploaded_files:
     st.stop()
 
 # -----------------------------
-# 📋 קריאת טקסט מהתמונה
+# 🧠 קריאת טקסט מהתמונה (EasyOCR)
 # -----------------------------
+reader = easyocr.Reader(['en'])
 data_rows = []
+
 for file in uploaded_files:
     img = Image.open(file)
-    text = pytesseract.image_to_string(img)
+    result = reader.readtext(img)
+    text = " ".join([res[1] for res in result])
 
-    # זיהוי המטבע מתוך השורה הראשונה או הכותרת
+    # זיהוי המטבע
     coin_match = re.search(r"(BTC|ETH|BNB|ARB|SOL|ADA|DOGE|MNT|USDT)", text)
     coin = coin_match.group(1) if coin_match else "לא זוהה"
 
-    # איתור כל ערכי יעד ו־APR
-    lines = text.split("\n")
-    for line in lines:
-        # איתור Target ו־APR
-        target = re.findall(r"\d+\.\d+", line)
-        apr_match = re.search(r"(\d{2,4}\.?\d*)\s*%", line)
+    # חיפוש Target ו־APR
+    lines = text.split()
+    for i, word in enumerate(lines):
+        if re.match(r"^\d{3,5}\.\d+$", word):
+            if i + 1 < len(lines) and re.match(r"^\d{2,4}\.?\d*%$", lines[i + 1]):
+                target_val = float(word)
+                apr = float(lines[i + 1].replace("%", ""))
+                data_rows.append({"מטבע": coin, "Target": target_val, "APR": apr})
 
-        if len(target) == 1 and apr_match:
-            apr = float(apr_match.group(1))
-            target_val = float(target[0])
-            data_rows.append({"מטבע": coin, "Target": target_val, "APR": apr})
-
-# אם לא נמצאו נתונים
+# -----------------------------
+# בדיקה אם נמצאו נתונים
+# -----------------------------
 if not data_rows:
-    st.warning("❌ לא זוהו נתונים בתמונה. ודא שהתמונה ברורה ושהמספרים מופיעים באנגלית.")
+    st.warning("❌ לא נמצאו נתונים בתמונה. נסה צילום ממוקד של טבלת Bybit בלבד.")
     st.stop()
 
 df = pd.DataFrame(data_rows)
@@ -95,11 +97,10 @@ result = df.apply(analyze_row, axis=1)
 final_df = pd.concat([df, result], axis=1)
 
 # -----------------------------
-# 🧾 הצגת תוצאות
+# 🧾 תוצאות
 # -----------------------------
 st.divider()
 st.subheader("🔍 תוצאות הניתוח:")
-
 st.dataframe(final_df, use_container_width=True)
 
 best = final_df[final_df["המלצה"].str.contains("Buy Low|Sell High")]
@@ -111,10 +112,6 @@ if not best.empty:
 else:
     st.info("אין כרגע הצעות חזקות מספיק — רוב ההצעות קרובות מדי או רחוקות מדי.")
 
-# -----------------------------
-# 📥 הורדת תוצאות
-# -----------------------------
 st.download_button("⬇️ הורד טבלה (CSV)", data=final_df.to_csv(index=False).encode('utf-8'), file_name="dualasset_results.csv", mime="text/csv")
-
 st.divider()
-st.caption("נבנה על ידי ChatGPT & Itamar 🔹 גרסה 1.0")
+st.caption("נבנה על ידי ChatGPT & Itamar 🔹 גרסה 1.1 עם EasyOCR")
