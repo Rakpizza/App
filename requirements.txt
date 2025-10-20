@@ -1,5 +1,6 @@
-streamlit
-pandas
-pillow
-easyocr
-numpy
+streamlit==1.28.1
+pandas==2.1.1
+pillow==10.1.0
+easyocr==1.7.0
+numpy==1.24.3
+opencv-python==4.8.1.78
