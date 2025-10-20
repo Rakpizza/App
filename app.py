@@ -18,14 +18,14 @@ st.subheader("🎯 זיהוי אוטומטי של הצעות Bybit הכי רוו
 # ===== יצירת OCR Reader =====
 @st.cache_resource
 def load_ocr():
-    st.write("🔄 טוען OCR Engine...")
+    st.write("Loading OCR Engine...")
     return easyocr.Reader(['en'], gpu=False)
 
 try:
     reader = load_ocr()
-    st.write("✅ OCR טוען בהצלחה")
+    st.write("OCR loaded successfully")
 except Exception as e:
-    st.error(f"❌ שגיאה בטעינת OCR: {e}")
+    st.error(f"OCR Error: {e}")
     reader = None
 
 # ===== פונקציות =====
@@ -33,7 +33,7 @@ except Exception as e:
 def extract_ocr_text(image):
     """קריאת טקסט מהתמונה"""
     if reader is None:
-        st.error("❌ OCR לא זמין")
+        st.error("OCR not available")
         return None
     
     try:
@@ -41,7 +41,7 @@ def extract_ocr_text(image):
         results = reader.readtext(img_array, detail=0)
         return results
     except Exception as e:
-        st.error(f"❌ שגיאה ב־OCR: {str(e)}")
+        st.error(f"OCR Error: {str(e)}")
         return None
 
 def parse_numbers_from_text(text):
